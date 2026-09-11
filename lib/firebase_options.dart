@@ -6,8 +6,8 @@ class DefaultFirebaseOptions {
   }
 
   static const FirebaseOptions android = FirebaseOptions(
-    apiKey: 'AIzaSyDaoIgEWGw4Jly4bCkePIOJfQ4aF_A0pHY',
-    appId: '1:431898814853:web:b89e7c04886914af81bcec',
+    apiKey: 'AIzaSyCCneWBluBA6-SPMKbBh9kHgF13FmF7VI4',
+    appId: '1:431898814853:android:84b68aa21ede348981bcec',
     messagingSenderId: '431898814853',
     projectId: 'indir-gitsin',
     storageBucket: 'indir-gitsin.firebasestorage.app',

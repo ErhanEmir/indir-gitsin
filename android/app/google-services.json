@@ -7,7 +7,7 @@
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:431898814853:android:b89e7c04886914af81bcec",
+        "mobilesdk_app_id": "1:431898814853:android:84b68aa21ede348981bcec",
         "android_client_info": {
           "package_name": "com.indirgitsin.app"
         }
@@ -15,7 +15,7 @@
       "oauth_client": [],
       "api_key": [
         {
-          "current_key": "AIzaSyDaoIgEWGw4Jly4bCkePIOJfQ4aF_A0pHY"
+          "current_key": "AIzaSyCCneWBluBA6-SPMKbBh9kHgF13FmF7VI4"
         }
       ],
       "services": {
