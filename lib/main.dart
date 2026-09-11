@@ -28,9 +28,13 @@ import 'core/storage_service.dart';
 import 'core/notification_service.dart';
 import 'core/auth_service.dart';
 import 'features/auth/auth_page.dart';
+import 'core/subscription_service.dart';
 import 'features/player/player_page.dart';
 import 'features/player/network_player_page.dart';
 import 'features/explore/explore_page.dart';
+import 'features/plan/plan_page.dart';
+import 'features/market/market_page.dart';
+import 'features/splash/splash_page.dart';
 
 final youtubeServiceProvider = Provider((ref) => YoutubeService());
 final downloadServiceProvider = Provider((ref) => DownloadService());
@@ -44,6 +48,7 @@ Future<void> main() async {
   await EasyLocalization.ensureInitialized();
   await StorageService.init();
   await NotificationService.init();
+  await SubscriptionService.ensureInit();
   final prefs = await SharedPreferences.getInstance();
   final savedTheme = prefs.getString('theme_mode') ?? 'system';
   final savedLang = prefs.getString('lang');
@@ -109,7 +114,7 @@ class IndirGitsinApp extends ConsumerWidget {
           localizationsDelegates: context.localizationDelegates,
           supportedLocales: context.supportedLocales,
           locale: context.locale,
-          home: StreamBuilder<User?>(
+          home: SplashPage(child: StreamBuilder<User?>(
             stream: AuthService.authStateChanges,
             builder: (context, snapshot) {
               if (snapshot.connectionState == ConnectionState.waiting) {
@@ -120,7 +125,7 @@ class IndirGitsinApp extends ConsumerWidget {
               }
               return const AuthPage();
             },
-          ),
+          )),
         );
       },
     );
@@ -137,20 +142,40 @@ class _MainScaffoldState extends ConsumerState<MainScaffold> {
   int _idx = 0;
   final _filesKey = GlobalKey<FilesTabState>();
   final _homeKey = GlobalKey<HomeTabState>();
+  final _marketKey = GlobalKey<MarketPageState>();
+  Future<void> _checkPlanActive() async {
+    await SubscriptionService.ensureInit();
+    await SubscriptionService.enforcePlanRestrictions();
+    // tema kilidi — free + amoled ise koyu yap
+    final prefs = await SharedPreferences.getInstance();
+    final planStr = prefs.getString('sub_plan') ?? 'free';
+    final isDev = prefs.getBool('dev_mode') ?? false;
+    if (!isDev && planStr=='free' && prefs.getString('theme_mode')=='amoled') {
+      await prefs.setString('theme_mode', 'dark');
+      ref.read(themeModeProvider.notifier).state = 'dark';
+    }
+    final active = await SubscriptionService.isPlanActive();
+    if (!active && mounted) {
+      await Navigator.of(context).push(MaterialPageRoute(builder: (_)=> const PlanPage(mustSelect: true)));
+      setState((){});
+    }
+  }
+
   @override
   void initState() {
     super.initState();
+    _checkPlanActive();
     _firstLaunchCheck();
     // Her açılışta güncelleme tara - varsa dialog ile sor
     Future.delayed(const Duration(seconds: 2), () async {
       final prefs = await SharedPreferences.getInstance();
       final enabled = prefs.getBool('auto_update_enabled') ?? true;
       if (!enabled) return;
-      // Aralığa göre kontrol et
-      final intervalHours = prefs.getInt('update_interval_hours') ?? 6;
+      int intervalMinutes = prefs.getInt('update_interval_minutes') ?? -1;
+      if (intervalMinutes==-1) intervalMinutes = (prefs.getInt('update_interval_hours') ?? 6)*60;
       final last = prefs.getInt('last_update_check') ?? 0;
-      final hoursPassed = (DateTime.now().millisecondsSinceEpoch - last) / (1000*3600);
-      if (hoursPassed < intervalHours) return;
+      final minutesPassed = (DateTime.now().millisecondsSinceEpoch - last) / 60000;
+      if (minutesPassed < intervalMinutes) return;
       final res = await AppUpdateService().checkForUpdateManual();
       if (res!=null && res['hasUpdate']==true && mounted) {
         final current = res['current'];
@@ -162,23 +187,24 @@ class _MainScaffoldState extends ConsumerState<MainScaffold> {
             TextButton(onPressed: ()=> Navigator.pop(c), child: Text('Daha sonra'.tr())),
             FilledButton(onPressed: () async {
               Navigator.pop(c);
-              // Direkt ayarlara götür (5 sekme: 0 Home,1 Keşfet,2 Dosyalar,3 Favoriler,4 Ayarlar)
-              setState(()=> _idx=4);
+              // Direkt ayarlara götür (6 sekme: 0 Home,1 Keşfet,2 Dosyalar,3 Favoriler,4 Market,5 Ayarlar)
+              setState(()=> _idx=5);
               ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Ayarlar > Güncellemeleri denetle ile yükleyebilirsin'), behavior: SnackBarBehavior.floating));
             }, child: Text('Güncelle'.tr())),
           ],
         ));
       }
     });
-    // Periyodik kontrol - ayardaki aralığa göre
-    Timer.periodic(const Duration(hours: 1), (_) async {
+    // Periyodik kontrol - ayardaki aralığa göre (1 dk granularity)
+    Timer.periodic(const Duration(minutes: 1), (_) async {
       final prefs = await SharedPreferences.getInstance();
       final enabled = prefs.getBool('auto_update_enabled') ?? true;
       if (!enabled) return;
-      final intervalHours = prefs.getInt('update_interval_hours') ?? 6;
+      int intervalMinutes = prefs.getInt('update_interval_minutes') ?? -1;
+      if (intervalMinutes==-1) intervalMinutes = (prefs.getInt('update_interval_hours') ?? 6)*60;
       final last = prefs.getInt('last_update_check') ?? 0;
-      final hoursPassed = (DateTime.now().millisecondsSinceEpoch - last) / (1000*3600);
-      if (hoursPassed >= intervalHours) AppUpdateService().checkAndUpdateSilently();
+      final minutesPassed = (DateTime.now().millisecondsSinceEpoch - last) / 60000;
+      if (minutesPassed >= intervalMinutes) AppUpdateService().checkAndUpdateSilently();
     });
   }
 
@@ -275,23 +301,35 @@ class _MainScaffoldState extends ConsumerState<MainScaffold> {
       ExplorePage(onSelect: (url){ _homeKey.currentState?.setLinkAndFetch(url); setState(()=> _idx=0); }),
       FilesTab(key: _filesKey),
       const FavoritesTab(),
+      MarketPage(key: _marketKey),
       const SettingsTab(),
     ];
     return Scaffold(
       body: IndexedStack(index: _idx, children: pages),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _idx,
-        onDestinationSelected: (i) {
-          setState(() => _idx = i);
-          if (i==2) _filesKey.currentState?.refresh();
-        },
-        destinations: [
-          NavigationDestination(icon: const Icon(Icons.home_rounded), label: 'home'.tr()),
-          NavigationDestination(icon: const Icon(Icons.explore_rounded), label: 'explore'.tr()),
-          NavigationDestination(icon: const Icon(Icons.folder_rounded), label: 'files'.tr()),
-          NavigationDestination(icon: const Icon(Icons.favorite_rounded), label: 'favorites'.tr()),
-          NavigationDestination(icon: const Icon(Icons.settings_rounded), label: 'settings'.tr()),
-        ],
+      bottomNavigationBar: NavigationBarTheme(
+        data: NavigationBarThemeData(
+          labelTextStyle: WidgetStateProperty.all(const TextStyle(fontSize: 10, fontWeight: FontWeight.w600)),
+          iconTheme: WidgetStateProperty.all(const IconThemeData(size: 22)),
+          height: 62,
+        ),
+        child: NavigationBar(
+          selectedIndex: _idx,
+          labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
+          onDestinationSelected: (i) {
+            setState(() => _idx = i);
+            if (i==2) _filesKey.currentState?.refresh();
+            if (i==4) _marketKey.currentState?.refresh();
+            if (i==0) _homeKey.currentState?.refreshQuota();
+          },
+          destinations: [
+            NavigationDestination(icon: const Icon(Icons.home_rounded), label: 'home'.tr()),
+            NavigationDestination(icon: const Icon(Icons.explore_rounded), label: 'explore'.tr()),
+            NavigationDestination(icon: const Icon(Icons.folder_rounded), label: 'files'.tr()),
+            NavigationDestination(icon: const Icon(Icons.favorite_rounded), label: 'favorites'.tr()),
+            NavigationDestination(icon: const Icon(Icons.storefront_rounded), label: 'Market'),
+            NavigationDestination(icon: const Icon(Icons.settings_rounded), label: 'settings'.tr()),
+          ],
+        ),
       ),
     );
   }
@@ -323,6 +361,7 @@ class HomeTabState extends ConsumerState<HomeTab> with TickerProviderStateMixin 
   Timer? _debounce;
   late AnimationController _heroCtrl;
   late Animation<double> _heroAnim;
+  int _quotaVersion = 0;
 
   @override
   void initState() {
@@ -513,6 +552,23 @@ class HomeTabState extends ConsumerState<HomeTab> with TickerProviderStateMixin 
 
   Future<void> _download() async {
     if (_video == null || _selected == null) return;
+    // Kota kontrolü
+    final isAudio = _selected!.type == 'audioOnly';
+    bool can = isAudio ? await SubscriptionService.canDownloadAudio() : await SubscriptionService.canDownloadVideo();
+    if (!can) {
+      if (!mounted) return;
+      final kind = isAudio ? 'ses' : 'video';
+      await showDialog(context: context, builder: (c)=> AlertDialog(
+        title: Row(children: [Icon(Icons.block_rounded, color: Colors.red), const SizedBox(width:8), Text('Limit Doldu')]),
+        content: Text('Günlük $kind indirme limitine ulaştınız. İsterseniz planınızı yükseltin veya birikmiş coin\'lerinizle marketten hak satın alın.'),
+        actions: [
+          TextButton(onPressed: ()=> Navigator.pop(c), child: Text('Kapat'.tr())),
+          FilledButton(onPressed: (){ Navigator.pop(c); Navigator.push(context, MaterialPageRoute(builder: (_)=> const MarketPage())); }, child: const Text('Markete Git')),
+          FilledButton.tonalIcon(onPressed: (){ Navigator.pop(c); Navigator.push(context, MaterialPageRoute(builder: (_)=> const PlanPage())); }, icon: const Icon(Icons.workspace_premium_rounded, size:16), label: const Text('Planı Yükselt')),
+        ],
+      ));
+      return;
+    }
     HapticFeedback.mediumImpact();
     setState(() { _downloading = true; _progress = 0; _error = null; });
     // ext catch bloğunda da lazım olduğu için try dışında tanımla
@@ -526,6 +582,9 @@ class HomeTabState extends ConsumerState<HomeTab> with TickerProviderStateMixin 
         onProgress: (rx, total) { if (total > 0 && mounted) setState(() => _progress = rx / total); },
       );
       StorageService.addHistory({'id': _video!.id, 'title': _video!.title, 'thumbnail': _video!.thumbnailUrl, 'url': 'https://www.youtube.com/watch?v=${_video!.id}', 'path': path, 'date': DateTime.now().toIso8601String()});
+      // Kota düş
+      if (isAudio) await SubscriptionService.consumeAudio(); else await SubscriptionService.consumeVideo();
+      if (mounted) setState(()=> _quotaVersion++);
       setState(() { _savedPath = path; _downloading = false; _progress = 1; });
       HapticFeedback.heavyImpact();
       // Bildirim (ayardan kapatılabilir)
@@ -570,6 +629,7 @@ class HomeTabState extends ConsumerState<HomeTab> with TickerProviderStateMixin 
 
   void _clear() => setState(() { _linkCtrl.clear(); _video = null; _error = null; _savedPath = null; });
   void setLinkAndFetch(String url) { _linkCtrl.text = url; _fetch(); }
+  void refreshQuota() => setState(()=> _quotaVersion++);
 
   @override
   Widget build(BuildContext context) {
@@ -582,6 +642,9 @@ class HomeTabState extends ConsumerState<HomeTab> with TickerProviderStateMixin 
           const SizedBox(width: 8),
           Text('İndir Gitsin'.tr(), style: const TextStyle(fontWeight: FontWeight.w800)),
         ]),
+        actions: [
+          Padding(padding: const EdgeInsets.only(right:8), child: FilledButton.tonalIcon(onPressed: () async { await Navigator.push(context, MaterialPageRoute(builder: (_)=> const PlanPage())); setState((){}); }, icon: const Icon(Icons.workspace_premium_rounded, size:16), label: const Text('Planı Yükselt', style: TextStyle(fontSize:11, fontWeight: FontWeight.w800)))),
+        ],
       ),
       body: RefreshIndicator(
         onRefresh: () async { _clear(); FocusScope.of(context).unfocus(); },
@@ -618,9 +681,45 @@ class HomeTabState extends ConsumerState<HomeTab> with TickerProviderStateMixin 
                   Container(padding: const EdgeInsets.all(8), decoration: BoxDecoration(color: Colors.orange, borderRadius: BorderRadius.circular(10)), child: const Icon(Icons.share_rounded, color: Colors.white, size:18)),
                   const SizedBox(width:10),
                   Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('Arkadaşını davet et', style: const TextStyle(fontWeight: FontWeight.w800)), Text('İndir Gitsin\'i paylaş, herkes hızlı indirsin', style: TextStyle(color: Colors.grey[600], fontSize:11))])),
-                  FilledButton.tonalIcon(onPressed: () async { await Share.share('İndir Gitsin - YouTube & Music indirici https://github.com/ErhaEmir/indir-gitsin/releases'); }, icon: const Icon(Icons.send_rounded, size:16), label: const Text('Davet')),
+                  FilledButton.tonalIcon(onPressed: () async {
+                    await Share.share('İndir Gitsin - YouTube & Music indirici https://github.com/ErhaEmir/indir-gitsin/releases');
+                    final res = await SubscriptionService.doInvite();
+                    if (res=='coin' && context.mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('+30 Coin!'), backgroundColor: Colors.green));
+                    else if (res=='badge' && context.mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Rozet kazandın 🏅'), backgroundColor: Colors.deepPurple));
+                    setState((){});
+                  }, icon: const Icon(Icons.send_rounded, size:16), label: const Text('Davet')),
                 ])),
               ),
+              const SizedBox(height: 10),
+              // Kota kartı
+              FutureBuilder<Map<String,int>>(key: ValueKey(_quotaVersion), future: SubscriptionService.getRemaining(), builder: (c,snap){
+                final r = snap.data;
+                if (r==null) return const SizedBox();
+                final rv = r['video'] ?? 0; final ra = r['audio'] ?? 0; final lv = r['limitVideo'] ?? 0; final la = r['limitAudio'] ?? 0; final ev = r['extraVideo'] ?? 0; final ea = r['extraAudio'] ?? 0;
+                final totalV = lv + ev; final totalA = la + ea;
+                return FutureBuilder<PlanType>(future: SubscriptionService.getPlan(), builder: (c2,ps){
+                  final plan = ps.data ?? PlanType.free;
+                  final isUnlimited = plan == PlanType.unlimited;
+                  final videoText = isUnlimited ? 'Video ∞' : (ev>0 ? 'Video $rv / $totalV kaldı ($lv+$ev)' : 'Video $rv / $lv kaldı');
+                  final audioText = isUnlimited ? 'Ses ∞' : (ea>0 ? 'Ses $ra / $totalA kaldı ($la+$ea)' : 'Ses $ra / $la kaldı');
+                  final progressV = isUnlimited ? 1.0 : (totalV==0?0.0: (rv/totalV).clamp(0,1).toDouble());
+                  final progressA = isUnlimited ? 1.0 : (totalA==0?0.0: (ra/totalA).clamp(0,1).toDouble());
+                  return Container(padding: const EdgeInsets.all(14), decoration: BoxDecoration(color: Theme.of(context).colorScheme.primaryContainer.withOpacity(0.5), borderRadius: BorderRadius.circular(16), border: Border.all(color: Theme.of(context).colorScheme.primary.withOpacity(0.2))), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Row(children: [Icon(Icons.account_circle_rounded, size:16, color: cs.primary), const SizedBox(width:6), Text('Plan: ${plan.name.toUpperCase()}', style: TextStyle(fontWeight: FontWeight.w900, color: cs.primary, fontSize:12)), const Spacer(), Image.asset('assets/icons/ig_coin.png', width:20, height:20, errorBuilder: (_,__,___)=> const Icon(Icons.monetization_on_rounded, size:20, color: Colors.amber)), const SizedBox(width:4), FutureBuilder<int>(future: SubscriptionService.getCoins(), builder: (c3,s3){
+                      final coins = s3.data ?? 0;
+                      return Text(isUnlimited ? '∞ Coin' : '$coins Coin', style: const TextStyle(fontWeight: FontWeight.w800, fontSize:13));
+                    })]),
+                    const SizedBox(height:8),
+                    Row(children: [
+                      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Row(children: [const Icon(Icons.videocam_rounded, size:14), const SizedBox(width:4), Text(videoText, style: const TextStyle(fontWeight: FontWeight.w700, fontSize:12))]), const SizedBox(height:4), LinearProgressIndicator(value: progressV, minHeight:6, borderRadius: BorderRadius.circular(99)) ])),
+                      const SizedBox(width:12),
+                      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Row(children: [const Icon(Icons.music_note_rounded, size:14), const SizedBox(width:4), Text(audioText, style: const TextStyle(fontWeight: FontWeight.w700, fontSize:12))]), const SizedBox(height:4), LinearProgressIndicator(value: progressA, minHeight:6, borderRadius: BorderRadius.circular(99), color: Colors.green) ])),
+                    ]),
+                    const SizedBox(height:6),
+                    Text('quota_reset'.tr(), style: TextStyle(fontSize:10, color: Colors.grey[600])),
+                  ]));
+                });
+              }),
               const SizedBox(height: 12),
               // Arama (in-app YouTube search)
               const SizedBox(height: 4),
@@ -833,7 +932,7 @@ class FilesTabState extends State<FilesTab> {
       for (final pth in candidates) {
         final dir = Directory(pth);
         if (await dir.exists()) {
-          final files = await dir.list(recursive: true).where((e)=> e is File).toList();
+          final files = await dir.list(recursive: true).where((e)=> e is File && !e.path.endsWith('.nomedia') && !e.path.contains('/.')).toList();
           for (final f in files) { if (seenPaths.add(f.path)) all.add(f); }
         }
       }
@@ -940,18 +1039,22 @@ class FavoritesTab extends StatelessWidget { const FavoritesTab({super.key}); @o
 class SettingsTab extends ConsumerStatefulWidget { const SettingsTab({super.key}); @override ConsumerState<SettingsTab> createState()=> _SettingsTabState();}
 class _SettingsTabState extends ConsumerState<SettingsTab> {
   bool _autoUpdate = true;
-  int _interval = 6;
+  int _interval = 360; // dakika
   bool _checking = false;
   String? _status;
-  // PIN doğrulama — düz metin yerine hash karşılaştırma (basit obscure, reverse engel)
-  bool _verifyPin(String input, int which) {
-    int h = 0; for (int i = 0; i < input.length; i++) { h = (h * 31 + input.codeUnitAt(i)) % 999999; }
-    if (which == 1) return h == 8922; // 192168 obscure
-    if (which == 2) return h == 509409; // 1221 obscure
-    return false;
+  String _formatInterval(int m){
+    if (m==1) return 'instant'.tr() + ' (1 ' + 'minute'.tr() + ')';
+    if (m<60) return '$m ' + 'minutes'.tr();
+    if (m%60==0) return '${m~/60} ' + (m==60 ? 'hour'.tr() : 'hours'.tr());
+    return '${m~/60}h ${m%60}m';
   }
   @override void initState(){ super.initState(); _load(); }
-  Future<void> _load() async { final p=await SharedPreferences.getInstance(); setState(()=> { _autoUpdate = p.getBool('auto_update_enabled') ?? true, _interval = p.getInt('update_interval_hours') ?? 6 }); }
+  Future<void> _load() async {
+    final p=await SharedPreferences.getInstance();
+    int mins = p.getInt('update_interval_minutes') ?? -1;
+    if (mins==-1) mins = (p.getInt('update_interval_hours') ?? 6)*60;
+    setState(()=> { _autoUpdate = p.getBool('auto_update_enabled') ?? true, _interval = mins });
+  }
   Future<void> _toggleAuto(bool v) async { setState(()=> _autoUpdate=v); final p=await SharedPreferences.getInstance(); await p.setBool('auto_update_enabled', v); }
   Future<void> _manualCheck() async {
     setState(()=> _checking=true);
@@ -991,7 +1094,9 @@ class _SettingsTabState extends ConsumerState<SettingsTab> {
     final mode = ref.watch(themeModeProvider);
     final cs = Theme.of(context).colorScheme;
     return Scaffold(
-      appBar: AppBar(title: Text('settings'.tr())),
+      appBar: AppBar(title: Text('settings'.tr()), actions: [
+        Padding(padding: const EdgeInsets.only(right:8), child: FilledButton.tonalIcon(onPressed: () async { await Navigator.push(context, MaterialPageRoute(builder: (_)=> const PlanPage())); setState((){}); }, icon: const Icon(Icons.workspace_premium_rounded, size:16), label: const Text('Planı Yükselt', style: TextStyle(fontSize:11)))),
+      ]),
       body: ListView(padding: const EdgeInsets.fromLTRB(16,12,16,24), children: [
         // Kullanıcı bilgisi + Çıkış
         Card(child: Padding(padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -1008,16 +1113,38 @@ class _SettingsTabState extends ConsumerState<SettingsTab> {
           )),
         ]))),
         const SizedBox(height: 12),
+        // Plan kartı
+        FutureBuilder<PlanType>(future: SubscriptionService.getPlan(), builder: (c,snap){
+          final p = snap.data ?? PlanType.free;
+          return FutureBuilder<Map<String,int>>(future: SubscriptionService.getRemaining(), builder: (c2,s2){
+            final r = s2.data;
+            return Card(color: Colors.deepPurple.withOpacity(0.06), child: Padding(padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [Container(padding: const EdgeInsets.all(8), decoration: BoxDecoration(color: Colors.deepPurple, borderRadius: BorderRadius.circular(12)), child: const Icon(Icons.workspace_premium_rounded, color: Colors.white)), const SizedBox(width:10), Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('Mevcut Plan: ${p.name.toUpperCase()}', style: const TextStyle(fontWeight: FontWeight.w900)), Text(r==null ? '' : 'Video ${r['video']}/${r['limitVideo']} • Ses ${r['audio']}/${r['limitAudio']}', style: TextStyle(color: Colors.grey[600], fontSize:12))])) , FilledButton(onPressed: () async { await Navigator.push(context, MaterialPageRoute(builder: (_)=> const PlanPage())); setState((){}); }, child: const Text('Değiştir'))]),
+              const SizedBox(height:8),
+              SizedBox(width: double.infinity, child: OutlinedButton.icon(onPressed: () async { await Navigator.push(context, MaterialPageRoute(builder: (_)=> const MarketPage())); setState((){}); }, icon: const Icon(Icons.storefront_rounded), label: const Text('Markete Git'))),
+              FutureBuilder<bool>(future: SubscriptionService.isPlanActive(), builder: (c3,s3){
+                if (s3.data==false) return Padding(padding: const EdgeInsets.only(top:8), child: Text('Plan iptal edildi — yeni plan seçmelisin', style: TextStyle(color: Colors.red, fontWeight: FontWeight.w700, fontSize:12)));
+                return const SizedBox();
+              }),
+            ])));
+          });
+        }),
+        const SizedBox(height:12),
         // Tema kartı
         Card(child: Padding(padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Row(children: [Container(padding: const EdgeInsets.all(8), decoration: BoxDecoration(color: cs.primary.withOpacity(0.12), borderRadius: BorderRadius.circular(12)), child: Icon(Icons.palette_rounded, color: cs.primary)), const SizedBox(width: 10), Text('theme'.tr(), style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16))]),
           const SizedBox(height: 12),
-          Wrap(spacing: 8, runSpacing: 8, children: [
-            ChoiceChip(label: Text('theme_system'.tr()), selected: mode=='system', onSelected: (_){ ref.read(themeModeProvider.notifier).state='system'; SharedPreferences.getInstance().then((p)=> p.setString('theme_mode','system'));}),
-            ChoiceChip(label: Text('theme_light'.tr()), selected: mode=='light', onSelected: (_){ ref.read(themeModeProvider.notifier).state='light'; SharedPreferences.getInstance().then((p)=> p.setString('theme_mode','light'));}),
-            ChoiceChip(label: Text('theme_dark'.tr()), selected: mode=='dark', onSelected: (_){ ref.read(themeModeProvider.notifier).state='dark'; SharedPreferences.getInstance().then((p)=> p.setString('theme_mode','dark'));}),
-            ChoiceChip(label: Text('theme_amoled'.tr()), selected: mode=='amoled', avatar: const Icon(Icons.contrast_rounded, size:16), onSelected: (_){ ref.read(themeModeProvider.notifier).state='amoled'; SharedPreferences.getInstance().then((p)=> p.setString('theme_mode','amoled'));}),
-          ]),
+          FutureBuilder<List<dynamic>>(future: Future.wait([SubscriptionService.getPlan(), SharedPreferences.getInstance()]), builder: (c,snap){
+            final plan = snap.data !=null ? snap.data![0] as PlanType : PlanType.free;
+            final isDev = snap.data !=null ? (snap.data![1] as SharedPreferences).getBool('dev_mode') ?? false : false;
+            final amoledLocked = !isDev && plan==PlanType.free;
+            return Wrap(spacing: 8, runSpacing: 8, children: [
+              ChoiceChip(label: Text('theme_system'.tr()), selected: mode=='system', onSelected: (_){ ref.read(themeModeProvider.notifier).state='system'; SharedPreferences.getInstance().then((p)=> p.setString('theme_mode','system'));}),
+              ChoiceChip(label: Text('theme_light'.tr()), selected: mode=='light', onSelected: (_){ ref.read(themeModeProvider.notifier).state='light'; SharedPreferences.getInstance().then((p)=> p.setString('theme_mode','light'));}),
+              ChoiceChip(label: Text('theme_dark'.tr()), selected: mode=='dark', onSelected: (_){ ref.read(themeModeProvider.notifier).state='dark'; SharedPreferences.getInstance().then((p)=> p.setString('theme_mode','dark'));}),
+              Tooltip(message: amoledLocked ? 'Free planda kapalı — Plus/Pro veya Dev modunda açılır' : '', child: ChoiceChip(label: Text('theme_amoled'.tr()), selected: mode=='amoled', avatar: Icon(Icons.contrast_rounded, size:16, color: amoledLocked ? Colors.grey : null), onSelected: amoledLocked ? null : (_){ ref.read(themeModeProvider.notifier).state='amoled'; SharedPreferences.getInstance().then((p)=> p.setString('theme_mode','amoled'));}, disabledColor: Colors.grey[300], labelStyle: TextStyle(color: amoledLocked ? Colors.grey : null))),
+            ]);
+          }),
           const SizedBox(height: 8),
           Text('material_desc'.tr(), style: TextStyle(color: Colors.grey[600], fontSize: 12)),
         ]))),
@@ -1036,7 +1163,7 @@ class _SettingsTabState extends ConsumerState<SettingsTab> {
         Card(child: Padding(padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Row(children: [Container(padding: const EdgeInsets.all(8), decoration: BoxDecoration(color: Colors.green.withOpacity(0.12), borderRadius: BorderRadius.circular(12)), child: const Icon(Icons.system_update_rounded, color: Colors.green)), const SizedBox(width: 10), Text('auto_update'.tr(), style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16))]),
           const SizedBox(height: 4),
-          Text('auto_update_desc'.tr(), style: TextStyle(color: Colors.grey[600], fontSize: 12)),
+          Text('Yeni sürüm çıkınca otomatik indirir ve kurulumu başlatır (arka planda ${_formatInterval(_interval)} kontrol)', style: TextStyle(color: Colors.grey[600], fontSize: 12)),
           const SizedBox(height: 12),
           SwitchListTile(value: _autoUpdate, title: Text(_autoUpdate ? 'auto_on'.tr() : 'auto_off'.tr()), subtitle: Text(_autoUpdate ? 'auto_on_desc'.tr() : 'auto_off_desc'.tr()), onChanged: _toggleAuto, contentPadding: EdgeInsets.zero),
           if (_autoUpdate) ...[
@@ -1050,12 +1177,34 @@ class _SettingsTabState extends ConsumerState<SettingsTab> {
                 value: _interval,
                 underline: Container(height:1, color: Colors.grey[300]),
                 items: [
-                  DropdownMenuItem(value: 1, child: Text('1 ' + 'hour'.tr())),
-                  DropdownMenuItem(value: 6, child: Text('6 ' + 'hour'.tr())),
-                  DropdownMenuItem(value: 12, child: Text('12 ' + 'hour'.tr())),
-                  DropdownMenuItem(value: 24, child: Text('24 ' + 'hour'.tr())),
+                  DropdownMenuItem(value: 1, child: Text('instant'.tr())),
+                  DropdownMenuItem(value: 5, child: Text('5 ' + 'minutes'.tr())),
+                  DropdownMenuItem(value: 10, child: Text('10 ' + 'minutes'.tr())),
+                  DropdownMenuItem(value: 30, child: Text('30 ' + 'minutes'.tr())),
+                  DropdownMenuItem(value: 60, child: Text('1 ' + 'hour'.tr())),
+                  DropdownMenuItem(value: 180, child: Text('3 ' + 'hours'.tr())),
+                  DropdownMenuItem(value: 360, child: Text('6 ' + 'hours'.tr())),
+                  DropdownMenuItem(value: 720, child: Text('12 ' + 'hours'.tr())),
+                  DropdownMenuItem(value: 1440, child: Text('24 ' + 'hours'.tr())),
                 ],
-                onChanged: (v) async { if(v==null) return; final p=await SharedPreferences.getInstance(); await p.setInt('update_interval_hours', v); setState(()=> _interval=v); },
+                onChanged: (v) async {
+                  if(v==null) return;
+                  if (v < 60) {
+                    final ok = await showDialog<bool>(context: context, builder: (c)=> AlertDialog(
+                      title: Row(children: [const Icon(Icons.battery_alert_rounded, color: Colors.orange), const SizedBox(width:8), Text('battery_warning_title'.tr())]),
+                      content: Text('battery_warning_desc'.tr()),
+                      actions: [
+                        TextButton(onPressed: ()=> Navigator.pop(c,false), child: Text('cancel'.tr())),
+                        FilledButton(onPressed: ()=> Navigator.pop(c,true), child: Text('confirm'.tr())),
+                      ],
+                    ));
+                    if (ok != true) {
+                      // iptal -> 6 saate dön
+                      final p=await SharedPreferences.getInstance(); await p.setInt('update_interval_minutes', 360); setState(()=> _interval=360); return;
+                    }
+                  }
+                  final p=await SharedPreferences.getInstance(); await p.setInt('update_interval_minutes', v); await p.remove('update_interval_hours'); setState(()=> _interval=v);
+                },
               ),
             ]),
           ],
@@ -1068,7 +1217,11 @@ class _SettingsTabState extends ConsumerState<SettingsTab> {
           Row(children: [Container(padding: const EdgeInsets.all(8), decoration: BoxDecoration(color: Colors.orange.withOpacity(0.12), borderRadius: BorderRadius.circular(12)), child: const Icon(Icons.tune_rounded, color: Colors.orange)), const SizedBox(width: 10), Text('ease_of_use'.tr(), style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16))]),
           const SizedBox(height: 8),
           FutureBuilder<SharedPreferences>(future: SharedPreferences.getInstance(), builder: (c,s){
-            final p=s.data; final autoClip = p?.getBool('auto_clipboard') ?? true;
+            final p=s.data;
+            final planStr = p?.getString('sub_plan') ?? 'free';
+            final isDev = p?.getBool('dev_mode') ?? false;
+            final isPremium = planStr=='plus' || planStr=='pro' || planStr=='unlimited' || isDev;
+            final autoClip = p?.getBool('auto_clipboard') ?? true;
             final vib = p?.getBool('haptic') ?? true;
             final notif = p?.getBool('notify_enabled') ?? true;
             final autoFolder = p?.getBool('auto_folder') ?? true;
@@ -1082,10 +1235,10 @@ class _SettingsTabState extends ConsumerState<SettingsTab> {
                 if(v) { await Permission.notification.request(); }
                 (c as Element).markNeedsBuild(); 
               }, contentPadding: EdgeInsets.zero),
-              SwitchListTile(value: autoFolder, title: Text('auto_folder'.tr()), subtitle: Text('auto_folder_desc'.tr(), style: const TextStyle(fontSize:12)), onChanged: (v) async { final pr=await SharedPreferences.getInstance(); await pr.setBool('auto_folder', v); (c as Element).markNeedsBuild(); }, contentPadding: EdgeInsets.zero),
-              SwitchListTile(value: p?.getBool('auto_revoke') ?? false, title: Text('auto_revoke'.tr()), subtitle: Text('auto_revoke_desc'.tr(), style: const TextStyle(fontSize:12)), onChanged: (v) async { final pr=await SharedPreferences.getInstance(); await pr.setBool('auto_revoke', v); (c as Element).markNeedsBuild(); }, contentPadding: EdgeInsets.zero),
+              Opacity(opacity: isPremium?1:0.5, child: SwitchListTile(value: autoFolder, title: Text('auto_folder'.tr()), subtitle: Text(isPremium ? 'auto_folder_desc'.tr() : 'Premium — Plus/Pro ile açılır', style: const TextStyle(fontSize:12)), onChanged: isPremium ? (v) async { final pr=await SharedPreferences.getInstance(); await pr.setBool('auto_folder', v); (c as Element).markNeedsBuild(); } : null, contentPadding: EdgeInsets.zero)),
+              Opacity(opacity: isPremium?1:0.5, child: SwitchListTile(value: p?.getBool('auto_revoke') ?? false, title: Text('auto_revoke'.tr()), subtitle: Text(isPremium ? 'auto_revoke_desc'.tr() : 'Premium — Plus/Pro ile açılır', style: const TextStyle(fontSize:12)), onChanged: isPremium ? (v) async { final pr=await SharedPreferences.getInstance(); await pr.setBool('auto_revoke', v); (c as Element).markNeedsBuild(); } : null, contentPadding: EdgeInsets.zero)),
               const SizedBox(height: 8),
-              Row(children: [const Icon(Icons.video_settings_rounded, size:16, color: Colors.grey), const SizedBox(width:6), Text('default_format'.tr(), style: const TextStyle(fontSize:12, color: Colors.grey)), const Spacer(), DropdownButton<String>(value: defaultFormat, items: [DropdownMenuItem(value:'mp4', child: Text('MP4')), DropdownMenuItem(value:'mp3', child: Text('MP3')), DropdownMenuItem(value:'webm', child: Text('WEBM'))], onChanged: (v) async { if(v==null) return; final pr=await SharedPreferences.getInstance(); await pr.setString('default_format', v); (c as Element).markNeedsBuild(); })]),
+              Opacity(opacity: isPremium?1:0.5, child: Row(children: [const Icon(Icons.video_settings_rounded, size:16, color: Colors.grey), const SizedBox(width:6), Text(isPremium ? 'default_format'.tr() : 'Varsayılan format (Premium)', style: const TextStyle(fontSize:12, color: Colors.grey)), const Spacer(), DropdownButton<String>(value: defaultFormat, items: [DropdownMenuItem(value:'mp4', child: Text('MP4')), DropdownMenuItem(value:'mp3', child: Text('MP3')), DropdownMenuItem(value:'webm', child: Text('WEBM'))], onChanged: isPremium ? (v) async { if(v==null) return; final pr=await SharedPreferences.getInstance(); await pr.setString('default_format', v); (c as Element).markNeedsBuild(); } : null)])),
 
               const SizedBox(height: 4),
               SizedBox(width: double.infinity, child: OutlinedButton.icon(onPressed: () async {
@@ -1114,28 +1267,28 @@ class _SettingsTabState extends ConsumerState<SettingsTab> {
                   Row(children: [
                     Container(padding: const EdgeInsets.all(8), decoration: BoxDecoration(color: Colors.deepPurple.withOpacity(0.12), borderRadius: BorderRadius.circular(12)), child: const Icon(Icons.bug_report_rounded, color: Colors.deepPurple)),
                     const SizedBox(width: 10),
-                    Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('Geliştirici Test Modu', style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16)), Text('Sadece PIN bilenler açabilir', style: TextStyle(color: Colors.grey[600], fontSize: 11))])),
+                    Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('Geliştirici Test Modu', style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16))])),
                     Switch(
                       value: isDev,
                       onChanged: (v) async {
                         final prefs = await SharedPreferences.getInstance();
                         final isLocked = prefs.getBool('dev_mode_locked') ?? false;
                         if (v) {
-                          // Eğer kilitliyse 2. PIN (1221) sor
+                          // Eğer kilitliyse 2. şifre sor
                           if (isLocked) {
                             final pin2Ctrl = TextEditingController();
                             final ok2 = await showDialog<bool>(
                               context: context,
                               builder: (d) => AlertDialog(
-                                title: const Text('2. PIN Gerekli'),
+                                title: const Text('Şifre Gerekli'),
                                 content: Column(mainAxisSize: MainAxisSize.min, children: [
-                                  const Text('Bir önceki PIN yanlış girildi. Devam etmek için 4 haneli 2. PIN\'i girin'),
+                                  const Text('Devam etmek için şifre girin'),
                                   const SizedBox(height: 12),
-                                  TextField(controller: pin2Ctrl, keyboardType: TextInputType.number, maxLength: 4, decoration: const InputDecoration(hintText: '••••', border: OutlineInputBorder()), obscureText: true),
+                                  TextField(controller: pin2Ctrl, keyboardType: TextInputType.text, decoration: const InputDecoration(hintText: '••••', border: OutlineInputBorder()), obscureText: true),
                                 ]),
                                 actions: [
                                   TextButton(onPressed: () => Navigator.pop(d, false), child: Text('cancel'.tr())),
-                                  FilledButton(onPressed: () => Navigator.pop(d, _verifyPin(pin2Ctrl.text, 2)), child: const Text('Onayla')),
+                                  FilledButton(onPressed: () => Navigator.pop(d, SubscriptionService.verifyPin(pin2Ctrl.text, 2)), child: const Text('Onayla')),
                                 ],
                               ),
                             );
@@ -1143,24 +1296,24 @@ class _SettingsTabState extends ConsumerState<SettingsTab> {
                               await prefs.setBool('dev_mode_locked', false);
                               if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Kilit açıldı, tekrar deneyin'), backgroundColor: Colors.green));
                             } else {
-                              if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Yanlış 2. PIN'), backgroundColor: Colors.red));
+                              if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Yanlış şifre'), backgroundColor: Colors.red));
                             }
                             return;
                           }
-                          // Normal 1. PIN sor
+                          // Normal 1. şifre sor
                           final pinCtrl = TextEditingController();
                           final ok = await showDialog<bool>(
                             context: context,
                             builder: (d) => AlertDialog(
-                              title: const Text('PIN Girin'),
+                              title: const Text('Şifre Girin'),
                               content: Column(mainAxisSize: MainAxisSize.min, children: [
-                                const Text('Geliştirici modunu açmak için 6 haneli PIN girin'),
+                                const Text('Geliştirici modunu açmak için şifre girin'),
                                 const SizedBox(height: 12),
-                                TextField(controller: pinCtrl, keyboardType: TextInputType.number, maxLength: 6, decoration: const InputDecoration(hintText: '••••••', border: OutlineInputBorder()), obscureText: true),
+                                TextField(controller: pinCtrl, keyboardType: TextInputType.text, decoration: const InputDecoration(hintText: '••••', border: OutlineInputBorder()), obscureText: true),
                               ]),
                               actions: [
                                 TextButton(onPressed: () => Navigator.pop(d, false), child: Text('cancel'.tr())),
-                                FilledButton(onPressed: () => Navigator.pop(d, _verifyPin(pinCtrl.text, 1)), child: const Text('Onayla')),
+                                FilledButton(onPressed: () => Navigator.pop(d, SubscriptionService.verifyPin(pinCtrl.text, 1)), child: const Text('Onayla')),
                               ],
                             ),
                           );
@@ -1210,9 +1363,9 @@ class _SettingsTabState extends ConsumerState<SettingsTab> {
                             await prefs.setBool('dev_mode', true);
                             (c as Element).markNeedsBuild();
                           } else {
-                            // Yanlış PIN -> kilitle
+                            // Yanlış şifre -> kilitle
                             await prefs.setBool('dev_mode_locked', true);
-                            if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Yanlış PIN - Bir sonraki güncellemeye, silip yeniden yükleyene veya 2. PIN (1221) girilene kadar açılamaz'), backgroundColor: Colors.red, duration: Duration(seconds: 5)));
+                            if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Yanlış şifre'), backgroundColor: Colors.red, duration: Duration(seconds: 2)));
                           }
                         } else {
                           final p = await SharedPreferences.getInstance();
@@ -1242,11 +1395,50 @@ class _SettingsTabState extends ConsumerState<SettingsTab> {
                         await StorageService.history.clear();
                         await StorageService.fav.clear();
                         await StorageService.search.clear();
-                        if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Tüm veriler sıfırlandı')));
+                        await SubscriptionService.resetAllToZero();
+                        // reset sonrası günlük 10 coin ver (ilk giriş)
+                        await SubscriptionService.addCoins(10);
+                        final p = await SharedPreferences.getInstance();
+                        await p.setString('sub_last_daily', '${DateTime.now().year}-${DateTime.now().month.toString().padLeft(2,'0')}-${DateTime.now().day.toString().padLeft(2,'0')}');
+                        if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Tüm veriler sıfırlandı — Coin/Hak 0, günlük 10 Coin verildi')));
+                        (c as Element).markNeedsBuild();
                       }),
                     ]),
+                    const SizedBox(height: 12),
+                    FutureBuilder<bool>(future: SharedPreferences.getInstance().then((p)=> p.getBool('dev_payment_panel_enabled') ?? true), builder: (c2,s2){
+                      final val = s2.data ?? true;
+                      return SwitchListTile(
+                        value: val,
+                        title: const Text('Ödeme Paneli Göster / Test Et', style: TextStyle(fontWeight: FontWeight.w700, fontSize:13)),
+                        subtitle: Text(val ? 'AÇIK — Satın alırken kart paneli gösterilir, geçerli kartta başarılı' : 'KAPALI — Satın al direkt başarılı (panel yok)', style: const TextStyle(fontSize:11)),
+                        secondary: Container(padding: const EdgeInsets.all(8), decoration: BoxDecoration(color: Colors.blue.withOpacity(0.12), borderRadius: BorderRadius.circular(10)), child: const Icon(Icons.payment_rounded, color: Colors.blue)),
+                        contentPadding: EdgeInsets.zero,
+                        onChanged: (v) async { final p=await SharedPreferences.getInstance(); await p.setBool('dev_payment_panel_enabled', v); (c as Element).markNeedsBuild(); },
+                      );
+                    }),
+                    const SizedBox(height: 8),
+                    Text('Dev Coin & Plan Araçları', style: TextStyle(fontWeight: FontWeight.w700, color: Colors.red[700], fontSize:13)),
+                    const SizedBox(height:6),
+                    FutureBuilder<int>(future: SubscriptionService.getCoins(), builder: (c2,s2)=> Text('Mevcut Coin: ${s2.data??0}', style: const TextStyle(fontWeight: FontWeight.w800))),
+                    const SizedBox(height:6),
+                    Wrap(spacing:8, runSpacing:8, children: [
+                      FilledButton.icon(onPressed: () async {
+                        final ctrl = TextEditingController();
+                        final v = await showDialog<int>(context: context, builder: (d)=> AlertDialog(title: const Text('Coin Ekle'), content: TextField(controller: ctrl, keyboardType: TextInputType.number, decoration: const InputDecoration(hintText: 'Miktar', border: OutlineInputBorder())), actions: [TextButton(onPressed: ()=> Navigator.pop(d), child: Text('cancel'.tr())), FilledButton(onPressed: (){ final n=int.tryParse(ctrl.text) ?? 0; Navigator.pop(d, n); }, child: const Text('Ekle'))]));
+                        if (v!=null && v>0) { await SubscriptionService.addCoins(v); (c as Element).markNeedsBuild(); if(context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('+$v Coin'))); }
+                      }, icon: const Icon(Icons.add_rounded), label: const Text('Coin Ekle')),
+                      FilledButton.icon(onPressed: () async {
+                        final ctrl = TextEditingController();
+                        final v = await showDialog<int>(context: context, builder: (d)=> AlertDialog(title: const Text('Coin Sil'), content: TextField(controller: ctrl, keyboardType: TextInputType.number, decoration: const InputDecoration(hintText: 'Miktar', border: OutlineInputBorder())), actions: [TextButton(onPressed: ()=> Navigator.pop(d), child: Text('cancel'.tr())), FilledButton(onPressed: (){ final n=int.tryParse(ctrl.text) ?? 0; Navigator.pop(d, n); }, child: const Text('Sil'))]));
+                        if (v!=null && v>0) { await SubscriptionService.removeCoins(v); (c as Element).markNeedsBuild(); if(context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('-$v Coin'))); }
+                      }, icon: const Icon(Icons.remove_rounded), label: const Text('Coin Sil')),
+                      FilledButton.tonalIcon(onPressed: () async { await SubscriptionService.selectPlan(PlanType.unlimited); (c as Element).markNeedsBuild(); if(context.mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Sınırsız Plan aktif'))); }, icon: const Icon(Icons.all_inclusive_rounded), label: const Text('Sınırsız Aktif')),
+                      OutlinedButton.icon(onPressed: () async { await SubscriptionService.selectPlan(PlanType.free); (c as Element).markNeedsBuild(); }, icon: const Icon(Icons.restart_alt_rounded), label: const Text('Free Yap')),
+                      FilledButton.tonalIcon(onPressed: () async { await Navigator.push(context, MaterialPageRoute(builder: (_)=> const PlanPage())); (c as Element).markNeedsBuild(); }, icon: const Icon(Icons.workspace_premium_rounded), label: const Text('Plan Seç')),
+                      FilledButton.tonalIcon(onPressed: () async { await Navigator.push(context, MaterialPageRoute(builder: (_)=> const MarketPage())); }, icon: const Icon(Icons.storefront_rounded), label: const Text('Markete Git')),
+                    ]),
                     const SizedBox(height: 6),
-                    Text('Hata detayları artık 404 gibi teknik kodlarla gösterilecek', style: TextStyle(color: Colors.grey[600], fontSize: 11)),
+                    Text('Hata detayları artık 404 gibi teknik kodlarla gösterilecek + Plus/Pro ve sınırsız devde ücretsiz seçilebilir, tüm gri ayarlar açılır', style: TextStyle(color: Colors.grey[600], fontSize: 11)),
                   ],
                 ]);
               },
