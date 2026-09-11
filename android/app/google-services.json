@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "431898814853",
+    "project_id": "indir-gitsin",
+    "storage_bucket": "indir-gitsin.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:431898814853:android:b89e7c04886914af81bcec",
+        "android_client_info": {
+          "package_name": "com.indirgitsin.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDaoIgEWGw4Jly4bCkePIOJfQ4aF_A0pHY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

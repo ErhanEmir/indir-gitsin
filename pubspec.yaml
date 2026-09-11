@@ -10,6 +10,8 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  firebase_core: ^3.6.0
+  firebase_auth: ^5.3.1
   cupertino_icons: ^1.0.8
   # YouTube core - saf Dart ile video bilgisi ve stream çekme
   youtube_explode_dart: ^2.5.2
