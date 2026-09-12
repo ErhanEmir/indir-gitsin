@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:crypto/crypto.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'user_repository.dart';
 
 enum PlanType { free, plus, pro, unlimited }
 
@@ -84,8 +85,8 @@ class SubscriptionService {
     }
     // quota date reset
     await _ensureQuotaReset();
-    // daily login +10
     await _checkDailyBonus();
+    await UserRepository.syncOnAuth();
   }
 
   static Future<void> _ensureQuotaReset() async {
@@ -199,6 +200,7 @@ class SubscriptionService {
       int used = prefs.getInt(_kVideoUsed) ?? 0;
       await prefs.setInt(_kVideoUsed, used + 1);
     }
+    await UserRepository.push();
   }
 
   static Future<void> consumeAudio() async {
@@ -211,6 +213,7 @@ class SubscriptionService {
       int used = prefs.getInt(_kAudioUsed) ?? 0;
       await prefs.setInt(_kAudioUsed, used + 1);
     }
+    await UserRepository.push();
   }
 
   static Future<bool> selectPlan(PlanType p) async {
@@ -237,13 +240,14 @@ class SubscriptionService {
       given.add(toStringValue(p));
       await prefs.setStringList(_kWelcomeGiven, given);
     }
-    // kota sıfırla seçince? kullanılmışı koru ama limit değişir
+    await UserRepository.push();
     return true;
   }
 
   static Future<void> cancelPlan() async {
     final p = await SharedPreferences.getInstance();
     await p.setBool(_kPlanActive, false);
+    await UserRepository.push();
   }
 
   static Future<bool> buyExtraVideo() async {
@@ -253,6 +257,7 @@ class SubscriptionService {
     await prefs.setInt(_kCoins, coins - 20);
     int extra = prefs.getInt(_kExtraVideo) ?? 0;
     await prefs.setInt(_kExtraVideo, extra + 1);
+    await UserRepository.push();
     return true;
   }
 
@@ -263,6 +268,7 @@ class SubscriptionService {
     await prefs.setInt(_kCoins, coins - 15);
     int extra = prefs.getInt(_kExtraAudio) ?? 0;
     await prefs.setInt(_kExtraAudio, extra + 1);
+    await UserRepository.push();
     return true;
   }
 
@@ -271,6 +277,7 @@ class SubscriptionService {
     final prefs = await SharedPreferences.getInstance();
     int cur = prefs.getInt(_kCoins) ?? 0;
     await prefs.setInt(_kCoins, cur + coins);
+    await UserRepository.push();
     return true;
   }
 
@@ -278,6 +285,7 @@ class SubscriptionService {
     final p = await SharedPreferences.getInstance();
     int cur = p.getInt(_kCoins) ?? 0;
     await p.setInt(_kCoins, cur + amount);
+    await UserRepository.push();
   }
 
   static Future<void> removeCoins(int amount) async {
@@ -285,6 +293,7 @@ class SubscriptionService {
     int cur = p.getInt(_kCoins) ?? 0;
     int newVal = (cur - amount).clamp(0, 999999);
     await p.setInt(_kCoins, newVal);
+    await UserRepository.push();
   }
 
   static Future<int> getInviteCount() async {
@@ -305,9 +314,11 @@ class SubscriptionService {
     if (cnt <= 10) {
       int cur = prefs.getInt(_kCoins) ?? 0;
       await prefs.setInt(_kCoins, cur + 30);
+      await UserRepository.push();
       return 'coin';
     } else {
       await prefs.setBool(_kBadge, true);
+      await UserRepository.push();
       return 'badge';
     }
   }
