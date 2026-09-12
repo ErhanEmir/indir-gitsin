@@ -82,6 +82,9 @@ class _AuthPageState extends State<AuthPage> with SingleTickerProviderStateMixin
       else if (msg.contains('weak-password')) msg = 'Şifre çok zayıf';
       else if (msg.contains('too-many-requests')) msg = 'Çok fazla deneme — biraz bekle';
       else if (msg.contains('invalid-credential')) msg = 'Geçersiz e-posta veya şifre';
+      else if (msg.contains('operation-not-allowed') || msg.contains('firebase_auth/unknown')) {
+        msg = 'Firebase Authentication > Email/Password henüz açık değil. Console\'dan etkinleştir.';
+      }
       else msg = 'Bir hata oluştu: $msg';
       setState(() => _error = msg);
     } finally {
