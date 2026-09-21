@@ -1,7 +1,7 @@
 name: indir_gitsin
 description: YouTube ve YouTube Music indirme uygulaması - modern ve kullanıcı dostu
 publish_to: 'none'
-version: 1.7.0+54
+version: 1.8.0+55
 
 environment:
   sdk: '>=3.5.0 <4.0.0'
@@ -10,9 +10,6 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  firebase_core: ^3.6.0
-  firebase_auth: ^5.3.1
-  cloud_firestore: ^5.4.4
   cupertino_icons: ^1.0.8
   crypto: ^3.0.6
   # YouTube core - saf Dart ile video bilgisi ve stream çekme

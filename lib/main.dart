@@ -17,17 +17,12 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
-import 'package:firebase_core/firebase_core.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'firebase_options.dart';
 import 'core/theme.dart';
 import 'core/youtube_service.dart';
 import 'core/download_service.dart';
 import 'core/app_update_service.dart';
 import 'core/storage_service.dart';
 import 'core/notification_service.dart';
-import 'core/auth_service.dart';
-import 'features/auth/auth_page.dart';
 import 'core/subscription_service.dart';
 import 'features/player/player_page.dart';
 import 'features/player/network_player_page.dart';
@@ -42,9 +37,6 @@ final themeModeProvider = StateProvider<String>((ref) => 'system');
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp(
-    options: DefaultFirebaseOptions.currentPlatform,
-  );
   await EasyLocalization.ensureInitialized();
   await StorageService.init();
   await NotificationService.init();
@@ -114,18 +106,7 @@ class IndirGitsinApp extends ConsumerWidget {
           localizationsDelegates: context.localizationDelegates,
           supportedLocales: context.supportedLocales,
           locale: context.locale,
-          home: SplashPage(child: StreamBuilder<User?>(
-            stream: AuthService.authStateChanges,
-            builder: (context, snapshot) {
-              if (snapshot.connectionState == ConnectionState.waiting) {
-                return const Scaffold(body: Center(child: CircularProgressIndicator()));
-              }
-              if (snapshot.hasData) {
-                return const MainScaffold();
-              }
-              return const AuthPage();
-            },
-          )),
+          home: const SplashPage(child: MainScaffold()),
         );
       },
     );
@@ -1098,19 +1079,11 @@ class _SettingsTabState extends ConsumerState<SettingsTab> {
         Padding(padding: const EdgeInsets.only(right:8), child: FilledButton.tonalIcon(onPressed: () async { await Navigator.push(context, MaterialPageRoute(builder: (_)=> const PlanPage())); setState((){}); }, icon: const Icon(Icons.workspace_premium_rounded, size:16), label: const Text('Planı Yükselt', style: TextStyle(fontSize:11)))),
       ]),
       body: ListView(padding: const EdgeInsets.fromLTRB(16,12,16,24), children: [
-        // Kullanıcı bilgisi + Çıkış
+        // Yerel kullanıcı bilgisi (giriş yok)
         Card(child: Padding(padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Row(children: [Container(padding: const EdgeInsets.all(8), decoration: BoxDecoration(color: cs.primary.withOpacity(0.12), borderRadius: BorderRadius.circular(12)), child: Icon(Icons.person_rounded, color: cs.primary)), const SizedBox(width: 10), Expanded(child: Text(AuthService.currentUser?.email ?? 'Kullanıcı', style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 14), maxLines: 1, overflow: TextOverflow.ellipsis))]),
-          const SizedBox(height: 12),
-          SizedBox(width: double.infinity, child: OutlinedButton.icon(
-            onPressed: () async {
-              final ok = await showDialog<bool>(context: context, builder: (c) => AlertDialog(title: const Text('Çıkış Yap'), content: const Text('Hesabınızdan çıkış yapılacak. Tekrar giriş yapmanız gerekecek.'), actions: [TextButton(onPressed: () => Navigator.pop(c, false), child: Text('cancel'.tr())), FilledButton(onPressed: () => Navigator.pop(c, true), child: const Text('Çıkış Yap'))]));
-              if (ok == true) await AuthService.signOut();
-            },
-            icon: const Icon(Icons.logout_rounded, size: 18),
-            label: const Text('Çıkış Yap'),
-            style: OutlinedButton.styleFrom(foregroundColor: Colors.red),
-          )),
+          Row(children: [Container(padding: const EdgeInsets.all(8), decoration: BoxDecoration(color: cs.primary.withOpacity(0.12), borderRadius: BorderRadius.circular(12)), child: Icon(Icons.person_rounded, color: cs.primary)), const SizedBox(width: 10), const Expanded(child: Text('Misafir Kullanıcı', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 14), maxLines: 1, overflow: TextOverflow.ellipsis))]),
+          const SizedBox(height: 8),
+          Text('Giriş gerekmez — tüm veriler cihazda saklanır.', style: TextStyle(color: Colors.grey[600], fontSize: 12)),
         ]))),
         const SizedBox(height: 12),
         // Plan kartı
